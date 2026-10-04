@@ -1,0 +1,348 @@
+/* Browser controller: all moves go through the shared rule engine. */
+(() => {
+  'use strict';
+  const E = window.DarkChess;
+  const $ = id => document.getElementById(id);
+  const icons = {
+    book: '<path d="M12 5c-3-2-6-2-9-1v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-3-1-6-1-9 1Z"/><path d="M12 5v15"/>',
+    mute: '<path d="M11 4 6 8H3v8h3l5 4V4Z"/><path d="m16 9 5 6m0-6-5 6"/>',
+    sound: '<path d="M11 4 6 8H3v8h3l5 4V4Z"/><path d="M15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/>',
+    bulb: '<path d="M9 18h6m-5 3h4M8 14a6 6 0 1 1 8 0c-1 1-1 2-1 2H9s0-1-1-2Z"/><path d="M12 1V0M3 5 1 4m20 0-2 1"/>',
+    undo: '<path d="m8 4-5 5 5 5M3 9h11a6 6 0 0 1 0 12h-4"/>',
+    refresh: '<path d="M20 8a9 9 0 1 0 1 7M20 3v5h-5"/>',
+    sprout: '<path d="M12 22V11M12 15C4 15 3 9 4 6c5 0 8 3 8 9Zm0-5C12 4 16 2 21 2c0 5-3 9-9 8Z"/>',
+    smile: '<circle cx="12" cy="12" r="9"/><path d="M8 14c1 4 7 4 8 0M8 8v1m8-1v1"/>',
+    check: '<path d="m5 12 4 4L19 6"/>',
+    heart: '<path d="M12 20S2 14 2 8a5 5 0 0 1 10-1 5 5 0 0 1 10 1c0 6-10 12-10 12Z"/>',
+    flag: '<path d="M5 22V3c5-4 9 4 14 0v12c-5 4-9-4-14 0"/>',
+    close: '<path d="m6 6 12 12M6 18 18 6"/>'
+  };
+  function icon(name) { return '<svg viewBox="0 0 24 24" aria-hidden="true">' + icons[name] + '</svg>'; }
+  document.querySelectorAll('[data-icon]').forEach(el => el.innerHTML = icon(el.dataset.icon));
+  const STORAGE = 'little-dark-chess-v1';
+  let state = E.create(), history = [], difficulty = 'standard', sound = false;
+  let selected = null, suggestion = null, aiTimer = null, arrowTimer = null, context = null, storageOK = true;
+  let restored = false;
+  let activeSearch = null, hintBusy = false, revision = 0;
+  function cancelSearch() {
+    revision++;
+    if (activeSearch) activeSearch.cancel();
+    activeSearch = null; hintBusy = false;
+  }
+  function searchPosition(side, level) {
+    const publicPosition = E.publicBoard(state.board);
+    const repetitions = {};
+    for (const [key, count] of Object.entries(state.positions)) {
+      const split = key.indexOf(':');
+      const color = key.slice(0, split) === 'human' ? state.humanSide : E.other(state.humanSide);
+      if (color) repetitions[color + key.slice(split)] = count;
+    }
+    const options = { captured: state.captured.map(p => ({ ...p })), quiet: state.quiet, repetitions };
+    return new Promise(resolve => {
+      let worker = null, url = null, timer = null, done = false;
+      const finish = result => {
+        if (done) return; done = true;
+        clearTimeout(timer); worker?.terminate(); if (url) URL.revokeObjectURL(url);
+        if (activeSearch === task) activeSearch = null;
+        resolve(result);
+      };
+      const task = { cancel: () => finish(null) };
+      if (activeSearch) activeSearch.cancel();
+      activeSearch = task;
+      const fallback = () => {
+        worker?.terminate();
+        timer = setTimeout(() => { if (!done) finish(E.analyze(publicPosition, side, level, { ...options, timeMs: 120, maxNodes: 2200 })); }, 0);
+      };
+      try {
+        const source = E.workerSource + '\nonmessage = function(e) { const d=e.data; postMessage(DarkChess.analyze(d.board,d.side,d.level,d.options)); };';
+        url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+        worker = new Worker(url);
+        worker.onmessage = event => finish(event.data);
+        worker.onerror = event => { event.preventDefault(); clearTimeout(timer); fallback(); };
+        worker.postMessage({ board: publicPosition, side, level, options });
+        timer = setTimeout(fallback, 5000);
+      } catch { fallback(); }
+    });
+  }
+  try {
+    const raw = localStorage.getItem(STORAGE);
+    if (raw) {
+      const saved = JSON.parse(raw);
+      if (saved.version === 1 && E.validState(saved.state)) {
+        state = saved.state;
+        history = Array.isArray(saved.history) ? saved.history.filter(E.validState).slice(-25) : [];
+        difficulty = ['practice', 'standard', 'challenge'].includes(saved.difficulty) ? saved.difficulty : 'standard';
+        sound = saved.sound === true;
+        restored = state.ply > 0;
+      }
+    }
+  } catch { storageOK = false; }
+  const mobile = window.matchMedia('(max-width: 43.99rem)');
+  const sideLabel = side => side === 'red' ? '紅隊' : '黑隊';
+  const snapshot = () => JSON.parse(JSON.stringify(state));
+  const save = () => {
+    try { localStorage.setItem(STORAGE, JSON.stringify({ version: 1, state, history, difficulty, sound })); storageOK = true; }
+    catch { storageOK = false; }
+    $('saveNote').lastElementChild.textContent = storageOK ? '進度會自動保存，可以放心休息' : '這個瀏覽器無法存檔；請保持頁面開啟';
+  };
+  function tone(kind = 'move') {
+    if (!sound) return;
+    try {
+      context ||= new (window.AudioContext || window.webkitAudioContext)();
+      if (context.state === 'suspended') context.resume().catch(() => {});
+      const o = context.createOscillator(), g = context.createGain();
+      o.type = 'sine'; o.frequency.setValueAtTime(kind === 'capture' ? 660 : kind === 'flip' ? 480 : 360, context.currentTime);
+      o.frequency.exponentialRampToValueAtTime(kind === 'capture' ? 880 : 280, context.currentTime + .12);
+      g.gain.setValueAtTime(.08, context.currentTime); g.gain.exponentialRampToValueAtTime(.001, context.currentTime + .18);
+      o.connect(g); g.connect(context.destination); o.start(); o.stop(context.currentTime + .2);
+    } catch { /* Sound is optional; gameplay always continues. */ }
+  }
+  function coach(title, text) {
+    $('coachTitle').textContent = title;
+    $('coachText').textContent = text;
+    $('mobileCoachTitle').textContent = title;
+    $('mobileCoachText').textContent = text;
+    $('tiger').classList.remove('happy');
+    requestAnimationFrame(() => $('tiger').classList.add('happy'));
+  }
+  function pieceHTML(p) {
+    if (p.hidden) return '<span class="piece covered"><span class="cover-flower"></span></span>';
+    return '<span class="piece ' + p.side + '">' + E.name(p) + '</span>';
+  }
+  const visualOrder = () => Array.from({ length: 32 }, (_, i) => mobile.matches ? (3 - i % 4) * 8 + Math.floor(i / 4) : i);
+  function location(i) { const v = visualOrder().indexOf(i), cols = mobile.matches ? 4 : 8; return '第 ' + (Math.floor(v / cols) + 1) + ' 列、第 ' + (v % cols + 1) + ' 格'; }
+  function direction(from, to) {
+    const order = visualOrder(), a = order.indexOf(from), b = order.indexOf(to), cols = mobile.matches ? 4 : 8;
+    return Math.floor(a / cols) === Math.floor(b / cols) ? (b > a ? '右' : '左') : (b > a ? '下' : '上');
+  }
+  function render() {
+    const interactive = state.turn === 'human' && !state.result;
+    const all = E.actions(state.board, state.humanSide);
+    const froms = new Set(all.filter(a => a.kind === 'move').map(a => a.from));
+    const targets = new Set(all.filter(a => a.kind === 'move' && a.from === selected).map(a => a.to));
+    const focusIndex = document.activeElement?.dataset.index;
+    $('board').replaceChildren();
+    for (const i of visualOrder()) {
+      const p = state.board[i], button = document.createElement('button');
+      button.type = 'button'; button.className = 'cell'; button.dataset.index = i;
+      if (p) button.innerHTML = pieceHTML(p);
+      button.setAttribute('aria-label', location(i) + '，' + (!p ? '空格' : p.hidden ? '未翻開的棋子' : sideLabel(p.side) + E.name(p)) + (interactive && targets.has(i) ? p ? '，可以吃' : '，可以走' : ''));
+      button.setAttribute('aria-pressed', String(selected === i));
+      button.setAttribute('aria-disabled', String(!interactive));
+      if (interactive && p?.hidden) button.classList.add('can-flip');
+      if (interactive && froms.has(i)) button.classList.add('available');
+      if (selected === i) button.classList.add('selected');
+      if (interactive && targets.has(i)) button.classList.add(p ? 'capture' : 'legal');
+      if (suggestion && (suggestion.to === i || suggestion.from === i)) button.classList.add('suggested');
+      if (state.last?.to === i) button.classList.add('last');
+      button.addEventListener('click', () => clickCell(i));
+      button.addEventListener('keydown', boardKeys);
+      $('board').append(button);
+    }
+    if (focusIndex !== undefined) $('board').querySelector('[data-index="' + focusIndex + '"]')?.focus({ preventScroll: true });
+    $('moveCount').textContent = '第 ' + (Math.floor(state.ply / 2) + 1) + ' 回合';
+    $('turnBadge').innerHTML = '<span></span> ' + (state.result ? '這一局完成了' : state.turn === 'ai' ? '小虎想一想…' : '輪到你了');
+    $('turnBadge').classList.toggle('thinking', state.turn === 'ai' && !state.result);
+    $('humanSide').textContent = state.humanSide ? '你是' + sideLabel(state.humanSide) + ' · 剩下 ' + (16 - state.captured.filter(p => p.side === state.humanSide).length) + ' 顆' : '翻一顆棋，決定你的顏色';
+    $('aiSide').textContent = state.humanSide ? sideLabel(E.other(state.humanSide)) + ' · 剩下 ' + (16 - state.captured.filter(p => p.side !== state.humanSide).length) + ' 顆' : '陪你一起練習';
+    const hidden = state.board.filter(p => p?.hidden).length;
+    $('remaining').textContent = hidden ? '還有 ' + hidden + ' 顆沒翻開' : '所有棋子都翻開了';
+    $('hintButton').disabled = !interactive || hintBusy;
+    $('hintButton').innerHTML = icon('bulb') + (hintBusy ? '幫你想一步…' : '給我提示');
+    $('undoButton').disabled = difficulty === 'challenge' || !history.length;
+    $('undoButton').title = difficulty === 'challenge' ? '挑戰模式不提供悔棋；可切換成入門或標準' : !history.length ? '走過一步，就可以悔棋' : '回到你上一步開始前';
+    $('difficulty').value = difficulty;
+    $('soundButton').innerHTML = icon(sound ? 'sound' : 'mute');
+    $('soundButton').setAttribute('aria-label', sound ? '關閉音效' : '開啟音效');
+    $('soundButton').setAttribute('aria-pressed', String(sound));
+    for (const side of ['red', 'black']) {
+      const el = $(side + 'Captured'), pieces = state.captured.filter(p => p.side === side);
+      el.innerHTML = pieces.length ? pieces.map(p => '<span class="mini-piece ' + side + '" aria-label="' + sideLabel(side) + E.name(p) + '">' + E.name(p) + '</span>').join('') : '<small>還沒有棋子休息</small>';
+    }
+    $('moveArrow').style.display = 'none';
+    if (state.last?.actor === 'ai' && state.last.kind === 'move') requestAnimationFrame(drawArrow);
+  }
+  function boardKeys(event) {
+    const order = visualOrder(), v = order.indexOf(Number(event.currentTarget.dataset.index)), cols = mobile.matches ? 4 : 8;
+    const steps = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -cols, ArrowDown: cols };
+    if (!(event.key in steps)) return;
+    event.preventDefault();
+    const next = v + steps[event.key];
+    if (next < 0 || next >= 32 || (event.key === 'ArrowLeft' && v % cols === 0) || (event.key === 'ArrowRight' && v % cols === cols - 1)) return;
+    $('board').querySelector('[data-index="' + order[next] + '"]').focus();
+  }
+  function drawArrow() {
+    const a = state.last;
+    if (!a || a.kind !== 'move' || a.actor !== 'ai') return;
+    const from = $('board').querySelector('[data-index="' + a.from + '"]').getBoundingClientRect();
+    const to = $('board').querySelector('[data-index="' + a.to + '"]').getBoundingClientRect();
+    const frame = $('moveArrow').parentElement.getBoundingClientRect();
+    const line = $('arrowLine');
+    line.setAttribute('x1', from.x + from.width / 2 - frame.x - 2); line.setAttribute('y1', from.y + from.height / 2 - frame.y - 2);
+    line.setAttribute('x2', to.x + to.width / 2 - frame.x - 2); line.setAttribute('y2', to.y + to.height / 2 - frame.y - 2);
+    $('moveArrow').style.display = 'block';
+    clearTimeout(arrowTimer); arrowTimer = setTimeout(() => $('moveArrow').style.display = 'none', 2400);
+  }
+  function baseCoach() {
+    if (state.result) { coach(state.result.winner === 'human' ? '你完成了這場挑戰！' : state.result.winner === 'draw' ? '握握手，這局和棋！' : '這次讓小虎先贏一局', state.lesson || '每一局都是新的練習。下次再一起想想不同的走法！'); return; }
+    if (state.turn === 'ai') { coach('換小虎想一想', '看看棋面，猜猜我下一步會怎麼走？'); return; }
+    if (!state.humanSide) { coach('嗨！先翻一顆棋吧', '我是小虎！點一顆綠色的棋子，看看你會加入紅隊還是黑隊。'); return; }
+    const last = state.last;
+    const intro = last?.actor === 'ai' ? last.kind === 'flip' ? '我翻開了' + sideLabel(last.piece.side) + '的「' + E.name(last.piece) + '」。' : '我把「' + E.name(last.piece) + '」往' + direction(last.from, last.to) + (last.captured ? '移動，吃掉了「' + E.name(last.captured) + '」。' : '移動了。') : '';
+    coach('輪到你了，' + sideLabel(state.humanSide) + '小棋手', intro + '點自己的棋，看看能走哪裡；也可以翻一顆蓋牌。');
+  }
+  function clickCell(i) {
+    if (state.result) { baseCoach(); return; }
+    if (state.turn !== 'human') { coach('等小虎走完這一步', '馬上就輪到你了，可以先看看棋面。'); return; }
+    const p = state.board[i];
+    if (selected !== null && E.canMove(state.board, selected, i, state.humanSide)) { perform({ kind: 'move', from: selected, to: i }); return; }
+    if (p?.hidden) { perform({ kind: 'flip', to: i }); return; }
+    suggestion = null;
+    if (p && p.side === state.humanSide) {
+      if (selected === i) { selected = null; render(); baseCoach(); return; }
+      selected = i;
+      const moves = E.actions(state.board, state.humanSide).filter(a => a.kind === 'move' && a.from === i);
+      render();
+      coach('你選了「' + E.name(p) + '」', moves.length ? '綠色圓點可以走，紅色「吃」框可以吃。' + (p.type === 'cannon' ? '炮吃棋時，要隔著恰好一顆棋。' : '點一個標記的位置，完成這一步。') : '這顆棋暫時走不了。試試另一顆自己的棋，或翻開一顆蓋牌。');
+    } else if (selected !== null) {
+      const source = state.board[selected];
+      coach('這一步還不能走喔', !p ? '一般移動只能上下左右走一格。請選有綠色圓點的位置。' : source.type === 'cannon' ? '炮要在同一直線上，隔著恰好一顆棋才能吃。' : '要相鄰，而且吃得動對方才行。試試有「吃」標記的棋。');
+    } else coach(p ? '這是小虎的棋子' : '先選一顆自己的棋', p ? '找找' + sideLabel(state.humanSide) + '的棋，或翻一顆綠色的蓋牌。' : '點自己的棋，再點綠色圓點，就能移動囉。');
+  }
+  function perform(action) {
+    cancelSearch();
+    const wasHuman = state.turn === 'human';
+    if (wasHuman) { history.push(snapshot()); if (history.length > 25) history.shift(); }
+    state = E.apply(state, action);
+    selected = null; suggestion = null;
+    tone(action.kind === 'flip' ? 'flip' : state.last.captured ? 'capture' : 'move');
+    render(); baseCoach(); save();
+    if (state.result) showResult(); else scheduleAI();
+  }
+  function scheduleAI() {
+    clearTimeout(aiTimer);
+    if (state.turn !== 'ai' || state.result) return;
+    aiTimer = setTimeout(async () => {
+      // Pause for reading rules or practising in the separate tutorial.
+      if (document.querySelector('dialog[open]')) { scheduleAI(); return; }
+      const token = revision;
+      const result = await searchPosition(E.other(state.humanSide), difficulty);
+      if (token !== revision || state.turn !== 'ai' || state.result) return;
+      if (document.querySelector('dialog[open]')) { scheduleAI(); return; }
+      if (result?.action) perform(result.action);
+    }, 450);
+  }
+  async function hint() {
+    if (state.turn !== 'human' || state.result || hintBusy) return;
+    hintBusy = true; render();
+    const token = revision;
+    const result = await searchPosition(state.humanSide, 'standard');
+    if (token !== revision || state.turn !== 'human' || state.result) return;
+    hintBusy = false;
+    suggestion = result?.action;
+    if (!suggestion) { render(); return; }
+    if (!suggestion) return;
+    selected = suggestion.kind === 'move' ? suggestion.from : null;
+    render();
+    if (suggestion.kind === 'flip') coach('試著翻開這一顆', '我用虛線框幫你圈起來了。' + result.reason);
+    else {
+      const p = state.board[suggestion.from], target = state.board[suggestion.to], after = E.moved(E.publicBoard(state.board), suggestion);
+      const risk = E.threatened(after, suggestion.to, state.humanSide);
+      const reason = target ? p.type === 'cannon' ? '中間剛好隔著一顆棋，炮可以吃掉它。' : p.type === 'pawn' && target.type === 'king' ? '小兵的特別本領，就是可以吃將！' : '你的棋和它一樣大或更大，可以吃掉它。' : E.threatened(E.publicBoard(state.board), suggestion.from, state.humanSide) ? '原本的位置可能被吃，試著移開。' : '先調整位置，看看接下來有沒有機會。';
+      coach(target ? '可以用「' + E.name(p) + '」吃「' + E.name(target) + '」' : '「' + E.name(p) + '」可以往' + direction(suggestion.from, suggestion.to) + '走', (target ? reason : result.reason) + (risk ? '不過，要注意：走過去後可能被已翻開的對手棋吃掉。' : '這是根據已翻開棋面的建議，你也可以自己選。'));
+    }
+  }
+  function undo() {
+    if (difficulty === 'challenge' || !history.length) return;
+    cancelSearch();
+    clearTimeout(aiTimer); clearTimeout(arrowTimer);
+    state = history.pop(); selected = null; suggestion = null;
+    render(); save(); coach('回到剛剛，再想一次', '已回到你上一步開始前，小虎剛才那一步也一起收回。這次想試試哪一步？');
+  }
+  function newGame() {
+    cancelSearch();
+    clearTimeout(aiTimer); clearTimeout(arrowTimer);
+    document.querySelectorAll('dialog[open]').forEach(d => d.close());
+    state = E.create(); history = []; selected = null; suggestion = null;
+    render(); baseCoach(); save();
+  }
+  function showResult() {
+    $('resultTitle').textContent = state.result.winner === 'human' ? '這一局，你贏了！' : state.result.winner === 'draw' ? '不分上下，握手和棋！' : '小虎贏了，下次再挑戰！';
+    $('resultReason').textContent = state.result.reason;
+    $('resultLesson').textContent = state.lesson || '你完成了 ' + Math.ceil(state.ply / 2) + ' 回合的思考。願意再試一次，就是很棒的進步。';
+    $('resultDialog').showModal();
+  }
+  function openDialog(id) { if (!$(id).open) $(id).showModal(); }
+  document.querySelectorAll('.close-dialog').forEach(b => b.addEventListener('click', () => b.closest('dialog').close()));
+  document.querySelectorAll('dialog').forEach(d => d.addEventListener('click', event => { const r = d.getBoundingClientRect(); if (event.target === d && (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom)) d.close(); }));
+  $('rulesButton').onclick = $('moreRules').onclick = () => openDialog('rulesDialog');
+  $('hintButton').onclick = hint;
+  $('undoButton').onclick = undo;
+  $('newButton').onclick = () => state.ply ? openDialog('newDialog') : newGame();
+  $('confirmNew').onclick = $('playAgain').onclick = newGame;
+  $('difficulty').onchange = event => {
+    cancelSearch(); clearTimeout(aiTimer); difficulty = event.target.value; render(); save();
+    const descriptions = { practice: ['入門：一起慢慢想', '小虎會保護自己的棋，不會故意亂送。可以使用提示和悔棋。'], standard: ['標準：多想幾步', '小虎會預想接下來的交換與危險。可以使用提示和悔棋。'], challenge: ['挑戰：小虎認真了', '小虎會想得更深，尤其是棋子變少的時候。不能悔棋，但仍可使用提示。'] };
+    coach(...descriptions[difficulty]); scheduleAI();
+  };
+  $('soundButton').onclick = () => { sound = !sound; tone('flip'); render(); save(); };
+  $('fullRanks').innerHTML = E.TYPES.map(t => '<span><i class="mini-piece">' + t.black + '</i>' + t.red + '／' + t.black + '</span>').join('');
+  // Three isolated, interactive lessons. No tutorial action touches game state.
+  let lesson = 0, lessonDone = false, lessonPicked = false;
+  const lessonData = [
+    { title: '第一步：翻開一顆棋', text: '點中間那顆綠色的棋子，看看裡面是誰。', finish: '翻到紅色的兵！正式對局中，第一顆棋的顏色就是你的隊伍。' },
+    { title: '第二步：往旁邊走一格', text: '先點紅色的俥，再點右邊的虛線空格。', finish: '走對了！每次可以上下左右走一格，不能斜走。' },
+    { title: '第三步：吃掉對方的棋', text: '先點紅色的俥，再點右邊黑色的馬。', finish: '成功吃棋！車比馬大，所以可以吃掉馬。你已經準備好囉！' }
+  ];
+  function renderLesson() {
+    const data = lessonData[lesson];
+    $('lessonProgress').textContent = '小虎練習場 · ' + (lesson + 1) + ' / 3';
+    $('lessonTitle').textContent = data.title; $('lessonText').textContent = data.text;
+    $('lessonFeedback').textContent = lessonDone ? data.finish : '點一點，試試看！';
+    $('lessonNext').disabled = !lessonDone; $('lessonNext').textContent = lesson === 2 ? '我會了，開始玩！' : '下一個練習';
+    $('lessonBoard').replaceChildren();
+    for (let i = 0; i < 3; i++) {
+      const b = document.createElement('button'); b.type = 'button'; b.dataset.lessonIndex = i;
+      let p = null;
+      if (lesson === 0 && i === 1) p = { side: 'red', type: 'pawn', hidden: !lessonDone };
+      if (lesson > 0 && i === (lessonDone ? 2 : 1)) p = { side: 'red', type: 'rook', hidden: false };
+      if (lesson === 2 && !lessonDone && i === 2) p = { side: 'black', type: 'horse', hidden: false };
+      if (p) b.innerHTML = pieceHTML(p);
+      b.setAttribute('aria-label', p ? p.hidden ? '翻開這顆棋' : sideLabel(p.side) + E.name(p) : '空格');
+      if (lesson > 0 && i === 2 && !lessonDone) b.classList.add('destination');
+      if (lessonPicked && i === 1 && !lessonDone) b.classList.add('picked');
+      b.onclick = () => {
+        if (lessonDone) return;
+        if (lesson === 0 && i === 1) lessonDone = true;
+        else if (lesson > 0 && i === 1) lessonPicked = true;
+        else if (lesson > 0 && i === 2 && lessonPicked) lessonDone = true;
+        else { $('lessonFeedback').textContent = lesson > 0 && !lessonPicked ? '先點選紅色的俥喔。' : '試試有棋子或虛線框的位置。'; return; }
+        tone(lesson === 0 ? 'flip' : 'move'); renderLesson();
+        if (lessonDone) $('lessonNext').focus(); else $('lessonBoard').children[2].focus();
+      };
+      $('lessonBoard').append(b);
+    }
+  }
+  $('lessonButton').onclick = () => { lesson = 0; lessonDone = false; lessonPicked = false; renderLesson(); openDialog('lessonDialog'); };
+  $('lessonNext').onclick = () => { if (!lessonDone) return; if (lesson === 2) { $('lessonDialog').close(); return; } lesson++; lessonDone = false; lessonPicked = false; renderLesson(); $('lessonBoard').children[1].focus(); };
+  mobile.addEventListener('change', () => { suggestion = null; render(); baseCoach(); });
+  window.addEventListener('resize', () => { if ($('moveArrow').style.display === 'block') drawArrow(); });
+  const wideLayout = window.matchMedia('(min-width: 64rem)');
+  function positionControls() {
+    const actions = $('hintButton').parentElement;
+    const note = $('saveNote');
+    if (wideLayout.matches) {
+      const sidebar = document.querySelector('.learning-area');
+      sidebar.insertBefore(actions, document.querySelector('.quick-guide'));
+      sidebar.insertBefore(note, document.querySelector('.quick-guide'));
+    } else {
+      const play = document.querySelector('.play-area');
+      play.append(actions, note);
+    }
+  }
+  wideLayout.addEventListener('change', positionControls);
+  positionControls();
+  render(); baseCoach(); save();
+  if (restored) coach('歡迎回來，小棋手', state.result ? '上一局已完成，按「重新開始」就能再挑戰一次。' : '棋盤幫你留好了。' + (state.turn === 'human' ? '輪到你，繼續剛才的冒險吧！' : '接下來是小虎的回合。'));
+  scheduleAI();
+})();
