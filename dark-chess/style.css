@@ -358,3 +358,55 @@ main { padding-top: 20px; }
 
 /* Bold lettering keeps the small resting pieces easy to read. */
 .capture-rail .captured-glyph { font-weight: 700; }
+
+/* Tablet-friendly controls and readable lettering. */
+.board-glyph { display: inline-block; transform: rotate(var(--board-angle, 0deg)); }
+.tablet-settings { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 16px 0; }
+.tablet-settings > label { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.tablet-settings select { min-height: 44px; }
+.tablet-settings input[type=range] { width: 110px; min-height: 44px; accent-color: var(--color-green); }
+.tablet-settings output { min-width: 4ch; }
+.tablet-settings button { min-height: 44px; }
+.board .cell, .rotate-captured, .lesson-board button { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: manipulation; }
+.cell.selected { outline: 4px solid var(--color-focus); outline-offset: -4px; }
+@media (any-pointer: coarse) {
+  button, select { min-height: 44px; }
+  .icon-button { min-width: 44px; }
+  .site-header, main { padding-inline: max(16px, env(safe-area-inset-left)); }
+  .game-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .play-area { padding: 0; }
+  .board-surround, .game-topline, .game-bottomline { max-width: 1100px; width: 100%; margin-inline: auto; }
+  .board-surround .board-shell { max-width: none; }
+  .mobile-coach { display: flex; margin: 12px 0; font-size: 16px; }
+  .mobile-coach strong { font-size: 18px; }
+  .mobile-coach p { font-size: 16px; line-height: 1.6; }
+  .learning-area { display: block; padding-top: 0; }
+  .learning-area .coach-card, .learning-area .quick-guide { display: none; }
+  .lesson-link { max-width: 480px; margin-inline: auto; }
+  .action-bar { justify-content: center; margin-top: 12px; }
+  .action-bar .hint-button { flex-basis: auto; margin: 0; }
+  .action-bar > button { min-height: 48px; padding-inline: 18px; }
+  .tablet-settings { justify-content: center; }
+  .capture-rail h2 { font-size: 12px; }
+  .board .cell:hover .piece { transform: none; }
+  footer { padding-block: 12px; }
+}
+@media (any-pointer: coarse) and (min-width: 44rem) and (orientation: portrait) {
+  .board-surround { grid-template-columns: minmax(0, 1fr); }
+  .capture-rail { display: flex; gap: 12px; align-items: center; padding: 6px 12px; }
+  .capture-heading { flex-direction: row; margin: 0; gap: 10px; }
+  .capture-rail .captured-pieces { display: flex; flex-wrap: wrap; justify-content: flex-start; }
+  .board { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+}
+@media (max-width: 43.99rem) { .tablet-settings { gap: 8px; }.tablet-settings > label { font-size: 12px; } }
+
+@media (any-pointer: coarse) {
+  .mobile-coach { align-items: flex-start; gap: 10px; padding: 12px 14px; background: var(--color-coach); border: 1px solid var(--color-coach-line); border-radius: 12px; }
+  .mobile-coach > span { flex: 0 0 24px; }
+  .mobile-coach svg { width: 24px; height: 24px; }
+  .mobile-coach > div { min-width: 0; }
+  .btn:hover { transform: none; }
+}
+
+/* Keep all game text upright, including browser-default emphasis tags. */
+body, button, input, select, textarea, h1, h2, h3, h4, h5, h6, i, em, .piece, .mini-piece, .board-glyph, .captured-glyph { font-style: normal; }

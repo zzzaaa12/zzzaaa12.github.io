@@ -8,9 +8,9 @@
   <title>暗棋小學堂｜和小虎一起動動腦</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23386b55'/%3E%3Ctext x='32' y='44' text-anchor='middle' font-size='42' fill='%23fff3d9'%3E棋%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="tokens.css">
-  <link rel="stylesheet" href="style.css?v=8">
+  <link rel="stylesheet" href="style.css?v=10">
   <script src="engine.js?v=5" defer></script>
-  <script src="app.js?v=11" defer></script>
+  <script src="app.js?v=13" defer></script>
 </head>
 <body>
   <header class="site-header">
@@ -30,6 +30,7 @@
         </div>
 <section class="capture-rail black-rail" aria-label="被吃掉的黑棋"><div class="capture-heading"><h2>黑棋休息區</h2><button type="button" class="rotate-captured" id="blackRotate" aria-label="旋轉黑棋休息區的棋字，目前 0 度" title="棋字轉向，每次順時針 90 度"><span aria-hidden="true">↻</span><small>轉向</small></button></div><div id="blackCaptured" class="captured-pieces"><small>還沒有棋子休息</small></div></section></div>
         <div class="game-bottomline"><div class="player"><div class="avatar you-avatar" aria-hidden="true"><span data-icon="smile"></span></div><div><strong>小小棋手 <span class="you-label">你</span></strong><span id="humanSide">翻一顆棋，決定你的顏色</span></div></div><span id="remaining" class="remaining">32 顆棋，等你發現</span></div>
+        <div class="tablet-settings" aria-label="遊玩設定"><button class="secondary-button" id="boardRotate" type="button">↻ 棋字轉向</button><button class="secondary-button" id="replayButton" type="button" disabled>再看一次</button><label>動作速度<select id="playSpeed"><option value="slow">慢慢看</option><option value="normal">一般</option></select></label><label>音量<input id="soundVolume" type="range" min="0" max="100" step="5" value="80"><output id="volumeValue" for="soundVolume">80%</output></label></div>
         <div class="action-bar"><button class="btn hint-button" id="hintButton"><span data-icon="bulb"></span>給我提示</button><button class="secondary-button" id="undoButton" disabled title="走過一步，就可以悔棋"><span data-icon="undo"></span>悔棋</button><button class="secondary-button" id="newButton"><span data-icon="refresh"></span>重新開始</button></div>
         <div class="save-note" id="saveNote"><span data-icon="check"></span><span>進度會自動保存，可以放心休息</span></div>
       </section>

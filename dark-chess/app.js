@@ -23,11 +23,14 @@
   let state = E.create(), history = [], difficulty = 'standard', sound = false;
   let selected = null, suggestion = null, aiTimer = null, arrowTimer = null, context = null, storageOK = true;
   const capturedRotation = { red: 0, black: 0 };
+  let boardRotation = 0, playSpeed = 'slow', soundVolume = .8;
+  let replayBusy = false, replayBoard = null;
   let renderedCaptureCount = 0;
   let restored = false, aiReview = false, moveAnimation = null;
   let activeSearch = null, hintBusy = false, revision = 0;
   function cancelSearch() {
     revision++;
+    replayBusy = false; replayBoard = null;
     moveAnimation?.cancel(); moveAnimation = null;
     if (activeSearch) activeSearch.cancel();
     activeSearch = null; hintBusy = false;
@@ -76,6 +79,9 @@
         history = Array.isArray(saved.history) ? saved.history.filter(E.validState).slice(-25) : [];
         difficulty = ['practice', 'standard', 'challenge'].includes(saved.difficulty) ? saved.difficulty : 'standard';
         sound = saved.sound === true;
+        if ([0, 90, 180, 270].includes(saved.boardRotation)) boardRotation = saved.boardRotation;
+        if (['slow', 'normal'].includes(saved.playSpeed)) playSpeed = saved.playSpeed;
+        if (Number.isFinite(saved.soundVolume) && saved.soundVolume >= 0 && saved.soundVolume <= 1) soundVolume = saved.soundVolume;
         for (const side of ['red', 'black']) {
           const angle = saved.capturedRotation?.[side];
           if ([0, 90, 180, 270].includes(angle)) capturedRotation[side] = angle;
@@ -88,7 +94,7 @@
   const sideLabel = side => side === 'red' ? '紅隊' : '黑隊';
   const snapshot = () => JSON.parse(JSON.stringify(state));
   const save = () => {
-    try { localStorage.setItem(STORAGE, JSON.stringify({ version: 1, state, history, difficulty, sound, capturedRotation })); storageOK = true; }
+    try { localStorage.setItem(STORAGE, JSON.stringify({ version: 1, state, history, difficulty, sound, capturedRotation, boardRotation, playSpeed, soundVolume })); storageOK = true; }
     catch { storageOK = false; }
     $('saveNote').lastElementChild.textContent = storageOK ? '進度會自動保存，可以放心休息' : '這個瀏覽器無法存檔；請保持頁面開啟';
   };
@@ -119,7 +125,7 @@
           const source = context.createBufferSource(), filter = context.createBiquadFilter(), gain = context.createGain();
           source.buffer = buffer;
           filter.type = 'lowpass'; filter.frequency.value = 3800; filter.Q.value = .5;
-          gain.gain.value = strength;
+          gain.gain.value = strength * soundVolume;
           source.connect(filter); filter.connect(gain); gain.connect(context.destination);
           source.onended = () => { source.disconnect(); filter.disconnect(); gain.disconnect(); };
           source.start(at);
@@ -142,7 +148,7 @@
   }
   function pieceHTML(p) {
     if (p.hidden) return '<span class="piece covered"><span class="cover-flower"></span></span>';
-    return '<span class="piece ' + p.side + '">' + E.name(p) + '</span>';
+    return '<span class="piece ' + p.side + '">' + '<span class="board-glyph">' + E.name(p) + '</span></span>';
   }
   const visualOrder = () => Array.from({ length: 32 }, (_, i) => mobile.matches ? (3 - i % 4) * 8 + Math.floor(i / 4) : i);
   function location(i) { const v = visualOrder().indexOf(i), cols = mobile.matches ? 4 : 8; return '第 ' + (Math.floor(v / cols) + 1) + ' 列、第 ' + (v % cols + 1) + ' 格'; }
@@ -151,14 +157,21 @@
     return Math.floor(a / cols) === Math.floor(b / cols) ? (b > a ? '右' : '左') : (b > a ? '下' : '上');
   }
   function render() {
-    const interactive = state.turn === 'human' && !state.result;
+    const interactive = state.turn === 'human' && !state.result && !replayBusy;
+    $('board').style.setProperty('--board-angle', boardRotation + 'deg');
+    $('boardRotate').setAttribute('aria-label', '旋轉棋盤棋字，目前 ' + boardRotation + ' 度');
+    $('playSpeed').value = playSpeed;
+    $('soundVolume').value = Math.round(soundVolume * 100);
+    $('volumeValue').textContent = Math.round(soundVolume * 100) + '%';
+    $('replayButton').disabled = replayBusy || state.turn !== 'human' || state.last?.actor !== 'ai';
+    $('replayButton').textContent = replayBusy ? '正在重播…' : '再看一次';
     const all = E.actions(state.board, state.humanSide);
     const froms = new Set(all.filter(a => a.kind === 'move').map(a => a.from));
     const targets = new Set(all.filter(a => a.kind === 'move' && a.from === selected).map(a => a.to));
     const focusIndex = document.activeElement?.dataset.index;
     $('board').replaceChildren();
     for (const i of visualOrder()) {
-      const p = state.board[i], button = document.createElement('button');
+      const p = (replayBoard || state.board)[i], button = document.createElement('button');
       button.type = 'button'; button.className = 'cell'; button.dataset.index = i;
       if (p) button.innerHTML = pieceHTML(p);
       button.setAttribute('aria-label', location(i) + '，' + (!p ? '空格' : p.hidden ? '未翻開的棋子' : sideLabel(p.side) + E.name(p)) + (interactive && targets.has(i) ? p ? '，可以吃' : '，可以走' : ''));
@@ -170,7 +183,7 @@
       if (interactive && targets.has(i)) button.classList.add(p ? 'capture' : 'legal');
       if (suggestion && (suggestion.to === i || suggestion.from === i)) button.classList.add('suggested');
       if (state.last?.to === i) button.classList.add('last');
-      if (aiReview && state.last?.actor === 'ai') {
+      if (!replayBusy && aiReview && state.last?.actor === 'ai') {
         if (state.last.from === i) button.classList.add('ai-origin');
         if (state.last.to === i) button.classList.add('ai-destination');
       }
@@ -180,7 +193,7 @@
     }
     if (focusIndex !== undefined) $('board').querySelector('[data-index="' + focusIndex + '"]')?.focus({ preventScroll: true });
     $('moveCount').textContent = '第 ' + (Math.floor(state.ply / 2) + 1) + ' 回合';
-    $('turnBadge').innerHTML = '<span></span> ' + (state.result ? '這一局完成了' : state.turn === 'ai' ? '小虎想一想…' : '輪到你了');
+    $('turnBadge').innerHTML = '<span></span> ' + (replayBusy ? '再看一次小虎的動作' : state.result ? '這一局完成了' : state.turn === 'ai' ? '小虎想一想…' : '輪到你了');
     $('turnBadge').classList.toggle('thinking', state.turn === 'ai' && !state.result);
     $('humanSide').textContent = state.humanSide ? '你是' + sideLabel(state.humanSide) + ' · 剩下 ' + (16 - state.captured.filter(p => p.side === state.humanSide).length) + ' 顆' : '翻一顆棋，決定你的顏色';
     $('aiSide').textContent = state.humanSide ? sideLabel(E.other(state.humanSide)) + ' · 剩下 ' + (16 - state.captured.filter(p => p.side !== state.humanSide).length) + ' 顆' : '陪你一起練習';
@@ -234,6 +247,7 @@
     coach('輪到你了，' + sideLabel(state.humanSide) + '小棋手', intro + '點自己的棋，看看能走哪裡；也可以翻一顆蓋牌。');
   }
   function clickCell(i) {
+    if (replayBusy) return;
     if (state.result) { baseCoach(); return; }
     if (state.turn !== 'human') { coach('等小虎走完這一步', '馬上就輪到你了，可以先看看棋面。'); return; }
     aiReview = false;
@@ -265,18 +279,18 @@
     render(); baseCoach(); save();
     if (state.result) showResult(); else scheduleAI();
   }
-  async function presentAI(action, token) {
+  async function presentAI(action, token, board = state.board) {
     const cell = i => $('board').querySelector('[data-index="' + i + '"]');
     const source = cell(action.kind === 'flip' ? action.to : action.from);
     const target = cell(action.to);
     source.classList.add('ai-preview');
     if (action.kind === 'flip') coach('看小虎翻這一顆', '亮起來的這顆棋，準備翻開囉。');
     else {
-      const p = state.board[action.from], q = state.board[action.to];
+      const p = board[action.from], q = board[action.to];
       target.classList.add(q ? 'ai-capture-preview' : 'ai-preview');
       coach('看看小虎這一步', '小虎要把「' + E.name(p) + '」往' + direction(action.from, action.to) + '移動' + (q ? '，吃掉你的「' + E.name(q) + '」。' : '一格。'));
     }
-    await new Promise(resolve => setTimeout(resolve, 700));
+    await new Promise(resolve => setTimeout(resolve, playSpeed === 'slow' ? 700 : 300));
     if (token !== revision || document.querySelector('dialog[open]')) return;
     const piece = source.querySelector('.piece');
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -288,11 +302,11 @@
         source.style.zIndex = '4';
         frames = [{ transform: 'translate(0, 0)' }, { transform: 'translate(' + (b.x - a.x) + 'px, ' + (b.y - a.y) + 'px)' }];
       }
-      const animation = piece.animate(frames, { duration: action.kind === 'flip' ? 600 : 1000, easing: 'ease-in-out', fill: 'forwards' });
+      const animation = piece.animate(frames, { duration: (action.kind === 'flip' ? 600 : 1000) * (playSpeed === 'slow' ? 1 : .6), easing: 'ease-in-out', fill: 'forwards' });
       moveAnimation = animation;
       try { await animation.finished; } catch { /* A new game or undo cancels the presentation. */ }
       if (moveAnimation === animation) moveAnimation = null;
-    } else await new Promise(resolve => setTimeout(resolve, 1000));
+    } else await new Promise(resolve => setTimeout(resolve, playSpeed === 'slow' ? 1000 : 600));
   }
   function scheduleAI() {
     clearTimeout(aiTimer);
@@ -310,10 +324,10 @@
         if (document.querySelector('dialog[open]')) { render(); baseCoach(); scheduleAI(); return; }
         perform(result.action);
       }
-    }, 1800);
+    }, playSpeed === 'slow' ? 1800 : 800);
   }
   async function hint() {
-    if (state.turn !== 'human' || state.result || hintBusy) return;
+    if (state.turn !== 'human' || state.result || hintBusy || replayBusy) return;
     aiReview = false; hintBusy = true; render();
     const token = revision;
     const result = await searchPosition(state.humanSide, 'standard');
@@ -374,8 +388,35 @@
       save();
     };
   }
+  $('boardRotate').onclick = () => {
+    boardRotation = (boardRotation + 90) % 360;
+    $('board').style.setProperty('--board-angle', boardRotation + 'deg');
+    $('boardRotate').setAttribute('aria-label', '旋轉棋盤棋字，目前 ' + boardRotation + ' 度');
+    save();
+  };
+  $('playSpeed').onchange = event => { playSpeed = event.target.value; save(); };
+  $('soundVolume').oninput = event => {
+    soundVolume = Number(event.target.value) / 100;
+    $('volumeValue').textContent = event.target.value + '%'; save();
+  };
+  $('soundVolume').onchange = () => tone('move');
+  $('replayButton').onclick = async () => {
+    if (replayBusy || state.turn !== 'human' || state.last?.actor !== 'ai') return;
+    cancelSearch();
+    const token = revision, action = state.last;
+    const before = state.board.map(p => p ? { ...p } : null);
+    if (action.kind === 'flip') before[action.to].hidden = true;
+    else { before[action.from] = { ...action.piece }; before[action.to] = action.captured ? { ...action.captured } : null; }
+    replayBusy = true; replayBoard = before; selected = null; suggestion = null;
+    render();
+    await presentAI(action, token, before);
+    if (token !== revision) return;
+    replayBusy = false; replayBoard = null; aiReview = true;
+    render(); baseCoach();
+    tone(action.kind === 'flip' ? 'flip' : action.captured ? 'capture' : 'move');
+  };
   $('soundButton').onclick = () => { sound = !sound; tone('flip'); render(); save(); };
-  $('fullRanks').innerHTML = E.TYPES.map(t => '<span><i class="mini-piece">' + t.black + '</i>' + t.red + '／' + t.black + '</span>').join('');
+  $('fullRanks').innerHTML = E.TYPES.map(t => '<span><span class="mini-piece">' + t.black + '</span>' + t.red + '／' + t.black + '</span>').join('');
   // Three isolated, interactive lessons. No tutorial action touches game state.
   let lesson = 0, lessonDone = false, lessonPicked = false;
   const lessonData = [
@@ -415,13 +456,20 @@
   }
   $('lessonButton').onclick = () => { lesson = 0; lessonDone = false; lessonPicked = false; renderLesson(); openDialog('lessonDialog'); };
   $('lessonNext').onclick = () => { if (!lessonDone) return; if (lesson === 2) { $('lessonDialog').close(); return; } lesson++; lessonDone = false; lessonPicked = false; renderLesson(); $('lessonBoard').children[1].focus(); };
-  mobile.addEventListener('change', () => { suggestion = null; render(); baseCoach(); });
-  window.addEventListener('resize', () => { if ($('moveArrow').style.display === 'block') drawArrow(); });
+  mobile.addEventListener('change', () => { suggestion = null; });
+  let layoutTimer;
+  window.addEventListener('resize', () => {
+    cancelSearch(); clearTimeout(aiTimer);
+    render(); baseCoach();
+    clearTimeout(layoutTimer);
+    layoutTimer = setTimeout(scheduleAI, 180);
+  });
   const wideLayout = window.matchMedia('(min-width: 64rem)');
+  const tabletLayout = window.matchMedia('(any-pointer: coarse)');
   function positionControls() {
     const actions = $('hintButton').parentElement;
     const note = $('saveNote');
-    if (wideLayout.matches) {
+    if (wideLayout.matches && !tabletLayout.matches) {
       const sidebar = document.querySelector('.learning-area');
       sidebar.insertBefore(actions, document.querySelector('.quick-guide'));
       sidebar.insertBefore(note, document.querySelector('.quick-guide'));
@@ -430,9 +478,13 @@
       play.append(actions, note);
     }
   }
+  tabletLayout.addEventListener('change', positionControls);
   wideLayout.addEventListener('change', positionControls);
   positionControls();
   render(); baseCoach(); save();
   if (restored) coach('歡迎回來，小棋手', state.result ? '上一局已完成，按「重新開始」就能再挑戰一次。' : '棋盤幫你留好了。' + (state.turn === 'human' ? '輪到你，繼續剛才的冒險吧！' : '接下來是小虎的回合。'));
   scheduleAI();
+  if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+    navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(() => {});
+  }
 })();
