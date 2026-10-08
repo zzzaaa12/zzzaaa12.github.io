@@ -8,9 +8,9 @@
   <title>暗棋小學堂｜和小虎一起動動腦</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23386b55'/%3E%3Ctext x='32' y='44' text-anchor='middle' font-size='42' fill='%23fff3d9'%3E棋%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="tokens.css">
-  <link rel="stylesheet" href="style.css?v=4">
+  <link rel="stylesheet" href="style.css?v=8">
   <script src="engine.js?v=5" defer></script>
-  <script src="app.js?v=5" defer></script>
+  <script src="app.js?v=11" defer></script>
 </head>
 <body>
   <header class="site-header">
@@ -22,11 +22,13 @@
       <section class="play-area" aria-label="暗棋對戰">
         <div class="game-topline"><div class="player"><div class="avatar tiger-mini" aria-hidden="true">虎</div><div><strong>小虎棋友</strong><span id="aiSide">陪你一起練習</span></div></div><div class="mode-control"><label for="difficulty">對戰模式</label><select id="difficulty"><option value="practice">入門 · 慢慢練</option><option value="standard" selected>標準 · 想幾步</option><option value="challenge">挑戰 · 認真下</option></select></div></div>
         <div class="mobile-coach"><span data-icon="bulb"></span><div><strong id="mobileCoachTitle">嗨！先翻一顆棋吧</strong><p id="mobileCoachText">點一顆綠色的棋子，看看你是哪一隊。</p></div></div>
+        <div class="board-surround"><section class="capture-rail red-rail" aria-label="被吃掉的紅棋"><div class="capture-heading"><h2>紅棋休息區</h2><button type="button" class="rotate-captured" id="redRotate" aria-label="旋轉紅棋休息區的棋字，目前 0 度" title="棋字轉向，每次順時針 90 度"><span aria-hidden="true">↻</span><small>轉向</small></button></div><div id="redCaptured" class="captured-pieces"><small>還沒有棋子休息</small></div></section>
         <div class="board-shell">
           <div class="board-top"><span id="turnBadge" class="turn-badge"><span></span> 輪到你了</span><span id="moveCount">第 1 回合</span></div>
           <div class="board-frame"><div id="board" class="board" role="group" aria-label="暗棋棋盤，32 格"></div><svg id="moveArrow" class="move-arrow" aria-hidden="true"><defs><marker id="arrowhead" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" /></marker></defs><line id="arrowLine" marker-end="url(#arrowhead)" /></svg></div>
           <div class="board-legend"><span><i class="legend-dot"></i> 可以走</span><span><i class="legend-capture"></i> 可以吃</span><span><i class="legend-flip"></i> 可以翻</span></div>
         </div>
+<section class="capture-rail black-rail" aria-label="被吃掉的黑棋"><div class="capture-heading"><h2>黑棋休息區</h2><button type="button" class="rotate-captured" id="blackRotate" aria-label="旋轉黑棋休息區的棋字，目前 0 度" title="棋字轉向，每次順時針 90 度"><span aria-hidden="true">↻</span><small>轉向</small></button></div><div id="blackCaptured" class="captured-pieces"><small>還沒有棋子休息</small></div></section></div>
         <div class="game-bottomline"><div class="player"><div class="avatar you-avatar" aria-hidden="true"><span data-icon="smile"></span></div><div><strong>小小棋手 <span class="you-label">你</span></strong><span id="humanSide">翻一顆棋，決定你的顏色</span></div></div><span id="remaining" class="remaining">32 顆棋，等你發現</span></div>
         <div class="action-bar"><button class="btn hint-button" id="hintButton"><span data-icon="bulb"></span>給我提示</button><button class="secondary-button" id="undoButton" disabled title="走過一步，就可以悔棋"><span data-icon="undo"></span>悔棋</button><button class="secondary-button" id="newButton"><span data-icon="refresh"></span>重新開始</button></div>
         <div class="save-note" id="saveNote"><span data-icon="check"></span><span>進度會自動保存，可以放心休息</span></div>
@@ -41,7 +43,6 @@
         <button id="lessonButton" class="lesson-link"><span class="lesson-icon" data-icon="flag"></span><span><strong>第一次玩暗棋？</strong><small>跟小虎練習 3 步就會</small></span><span aria-hidden="true">→</span></button>
       </aside>
     </div>
-    <section class="captured-panel" aria-label="已吃掉的棋子"><div class="section-title"><h2>棋子休息區</h2><span>被吃掉的棋子，在這裡休息</span></div><div class="captured-teams"><div><span class="team-label red">紅隊</span><div id="redCaptured" class="captured-pieces"><small>還沒有棋子休息</small></div></div><div><span class="team-label">黑隊</span><div id="blackCaptured" class="captured-pieces"><small>還沒有棋子休息</small></div></div></div></section>
   </main>
   <footer><span class="footer-flower" aria-hidden="true">✳</span><p>每一次思考，都是小小的進步。</p><span>暗棋小學堂 · 一起玩，一起長大</span></footer>
   <dialog id="rulesDialog" aria-labelledby="rulesTitle"><div class="dialog-heading"><div><span class="eyebrow">小虎的規則筆記</span><h2 id="rulesTitle">一回合，做一件事</h2></div><button class="icon-button close-dialog" aria-label="關閉規則"><span data-icon="close"></span></button></div><div class="rule-options"><p><b>01 翻棋</b>點一顆蓋牌，把它翻開。第一顆決定你的隊伍。</p><p><b>02 走棋</b>自己的棋，可以上下左右走一格，不能斜走。</p><p><b>03 吃棋</b>走到能吃的對手棋子上，就能把它吃掉。</p></div><h3>大小順序</h3><div id="fullRanks" class="full-ranks"></div><p>一般棋子能吃相同或更小的棋。<strong>兵／卒可以吃將／帥，但將／帥不能吃兵／卒。</strong></p><div class="rule-callout"><h3>炮／包是特別的！</h3><p>移動一樣走一格；吃棋時要在同一直線上，隔著恰好一顆棋（蓋牌也算），不管目標大小。不能吃蓋牌。其他棋子依大小規則吃炮：馬以上可以吃炮，兵不能吃炮。</p></div><h3>什麼時候結束？</h3><p>沒有剩下的棋子，或完全沒有合法行動的一方落敗。有蓋牌時仍可翻棋。相同局面與輪到的一方出現三次，或連續 80 步沒有吃棋、翻棋，就算和棋。</p><p class="muted">小虎和走法提示只看已翻開的棋，不會偷看蓋牌。入門與標準模式可悔棋；挑戰模式則試著自己完成一局。</p><button class="btn wide close-dialog">知道了，來玩！</button></dialog>

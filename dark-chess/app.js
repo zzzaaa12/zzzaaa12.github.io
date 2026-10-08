@@ -22,10 +22,13 @@
   const STORAGE = 'little-dark-chess-v1';
   let state = E.create(), history = [], difficulty = 'standard', sound = false;
   let selected = null, suggestion = null, aiTimer = null, arrowTimer = null, context = null, storageOK = true;
-  let restored = false;
+  const capturedRotation = { red: 0, black: 0 };
+  let renderedCaptureCount = 0;
+  let restored = false, aiReview = false, moveAnimation = null;
   let activeSearch = null, hintBusy = false, revision = 0;
   function cancelSearch() {
     revision++;
+    moveAnimation?.cancel(); moveAnimation = null;
     if (activeSearch) activeSearch.cancel();
     activeSearch = null; hintBusy = false;
   }
@@ -73,6 +76,10 @@
         history = Array.isArray(saved.history) ? saved.history.filter(E.validState).slice(-25) : [];
         difficulty = ['practice', 'standard', 'challenge'].includes(saved.difficulty) ? saved.difficulty : 'standard';
         sound = saved.sound === true;
+        for (const side of ['red', 'black']) {
+          const angle = saved.capturedRotation?.[side];
+          if ([0, 90, 180, 270].includes(angle)) capturedRotation[side] = angle;
+        }
         restored = state.ply > 0;
       }
     }
@@ -81,7 +88,7 @@
   const sideLabel = side => side === 'red' ? '紅隊' : '黑隊';
   const snapshot = () => JSON.parse(JSON.stringify(state));
   const save = () => {
-    try { localStorage.setItem(STORAGE, JSON.stringify({ version: 1, state, history, difficulty, sound })); storageOK = true; }
+    try { localStorage.setItem(STORAGE, JSON.stringify({ version: 1, state, history, difficulty, sound, capturedRotation })); storageOK = true; }
     catch { storageOK = false; }
     $('saveNote').lastElementChild.textContent = storageOK ? '進度會自動保存，可以放心休息' : '這個瀏覽器無法存檔；請保持頁面開啟';
   };
@@ -89,12 +96,40 @@
     if (!sound) return;
     try {
       context ||= new (window.AudioContext || window.webkitAudioContext)();
-      if (context.state === 'suspended') context.resume().catch(() => {});
-      const o = context.createOscillator(), g = context.createGain();
-      o.type = 'sine'; o.frequency.setValueAtTime(kind === 'capture' ? 660 : kind === 'flip' ? 480 : 360, context.currentTime);
-      o.frequency.exponentialRampToValueAtTime(kind === 'capture' ? 880 : 280, context.currentTime + .12);
-      g.gain.setValueAtTime(.08, context.currentTime); g.gain.exponentialRampToValueAtTime(.001, context.currentTime + .18);
-      o.connect(g); g.connect(context.destination); o.start(); o.stop(context.currentTime + .2);
+      const play = () => {
+        if (!sound || context.state !== 'running') return;
+        // A noisy contact transient and damped wooden resonances form each tap.
+        const tap = (delay, strength, pitch = 1) => {
+          const at = context.currentTime + delay;
+          const duration = .16;
+          const buffer = context.createBuffer(1, Math.ceil(context.sampleRate * duration), context.sampleRate);
+          const samples = buffer.getChannelData(0);
+          let smooth = 0;
+          for (let i = 0; i < samples.length; i++) {
+            const t = i / context.sampleRate;
+            const noise = Math.random() * 2 - 1;
+            smooth = smooth * .5 + noise * .5;
+            const contact = smooth * Math.exp(-t * 210) * .65;
+            const body = Math.sin(2 * Math.PI * 540 * pitch * t) * Math.exp(-t * 65) * .32
+              + Math.sin(2 * Math.PI * 1120 * pitch * t) * Math.exp(-t * 95) * .15
+              + Math.sin(2 * Math.PI * 1840 * pitch * t) * Math.exp(-t * 140) * .08;
+            const attack = Math.min(1, t / .0008);
+            samples[i] = (contact + body) * attack * Math.min(1, (duration - t) / .01);
+          }
+          const source = context.createBufferSource(), filter = context.createBiquadFilter(), gain = context.createGain();
+          source.buffer = buffer;
+          filter.type = 'lowpass'; filter.frequency.value = 3800; filter.Q.value = .5;
+          gain.gain.value = strength;
+          source.connect(filter); filter.connect(gain); gain.connect(context.destination);
+          source.onended = () => { source.disconnect(); filter.disconnect(); gain.disconnect(); };
+          source.start(at);
+        };
+        if (kind === 'flip') { tap(0, .26, 1.3); tap(.11, .65, 1.08); }
+        else if (kind === 'capture') { tap(0, .24, 1.2); tap(.085, .9, .88); }
+        else tap(0, .75, 1);
+      };
+      if (context.state === 'suspended') context.resume().then(play).catch(() => {});
+      else play();
     } catch { /* Sound is optional; gameplay always continues. */ }
   }
   function coach(title, text) {
@@ -135,6 +170,10 @@
       if (interactive && targets.has(i)) button.classList.add(p ? 'capture' : 'legal');
       if (suggestion && (suggestion.to === i || suggestion.from === i)) button.classList.add('suggested');
       if (state.last?.to === i) button.classList.add('last');
+      if (aiReview && state.last?.actor === 'ai') {
+        if (state.last.from === i) button.classList.add('ai-origin');
+        if (state.last.to === i) button.classList.add('ai-destination');
+      }
       button.addEventListener('click', () => clickCell(i));
       button.addEventListener('keydown', boardKeys);
       $('board').append(button);
@@ -157,10 +196,13 @@
     $('soundButton').setAttribute('aria-pressed', String(sound));
     for (const side of ['red', 'black']) {
       const el = $(side + 'Captured'), pieces = state.captured.filter(p => p.side === side);
-      el.innerHTML = pieces.length ? pieces.map(p => '<span class="mini-piece ' + side + '" aria-label="' + sideLabel(side) + E.name(p) + '">' + E.name(p) + '</span>').join('') : '<small>還沒有棋子休息</small>';
+      el.style.setProperty('--captured-angle', capturedRotation[side] + 'deg');
+      $(side + 'Rotate').setAttribute('aria-label', '旋轉' + (side === 'red' ? '紅' : '黑') + '棋休息區的棋字，目前 ' + capturedRotation[side] + ' 度');
+      el.innerHTML = pieces.length ? pieces.map((p, index) => '<span class="mini-piece ' + side + (state.captured.length > renderedCaptureCount && index === pieces.length - 1 && state.last?.captured?.side === side && state.last.captured.type === p.type ? ' just-captured' : '') + '" aria-label="' + sideLabel(side) + E.name(p) + '">' + '<span class="captured-glyph">' + E.name(p) + '</span></span>').join('') : '<small>還沒有棋子休息</small>';
     }
+    renderedCaptureCount = state.captured.length;
     $('moveArrow').style.display = 'none';
-    if (state.last?.actor === 'ai' && state.last.kind === 'move') requestAnimationFrame(drawArrow);
+    if (aiReview && state.last?.actor === 'ai' && state.last.kind === 'move') requestAnimationFrame(drawArrow);
   }
   function boardKeys(event) {
     const order = visualOrder(), v = order.indexOf(Number(event.currentTarget.dataset.index)), cols = mobile.matches ? 4 : 8;
@@ -173,7 +215,7 @@
   }
   function drawArrow() {
     const a = state.last;
-    if (!a || a.kind !== 'move' || a.actor !== 'ai') return;
+    if (!aiReview || !a || a.kind !== 'move' || a.actor !== 'ai') return;
     const from = $('board').querySelector('[data-index="' + a.from + '"]').getBoundingClientRect();
     const to = $('board').querySelector('[data-index="' + a.to + '"]').getBoundingClientRect();
     const frame = $('moveArrow').parentElement.getBoundingClientRect();
@@ -181,7 +223,7 @@
     line.setAttribute('x1', from.x + from.width / 2 - frame.x - 2); line.setAttribute('y1', from.y + from.height / 2 - frame.y - 2);
     line.setAttribute('x2', to.x + to.width / 2 - frame.x - 2); line.setAttribute('y2', to.y + to.height / 2 - frame.y - 2);
     $('moveArrow').style.display = 'block';
-    clearTimeout(arrowTimer); arrowTimer = setTimeout(() => $('moveArrow').style.display = 'none', 2400);
+    clearTimeout(arrowTimer);
   }
   function baseCoach() {
     if (state.result) { coach(state.result.winner === 'human' ? '你完成了這場挑戰！' : state.result.winner === 'draw' ? '握握手，這局和棋！' : '這次讓小虎先贏一局', state.lesson || '每一局都是新的練習。下次再一起想想不同的走法！'); return; }
@@ -194,6 +236,9 @@
   function clickCell(i) {
     if (state.result) { baseCoach(); return; }
     if (state.turn !== 'human') { coach('等小虎走完這一步', '馬上就輪到你了，可以先看看棋面。'); return; }
+    aiReview = false;
+    $('moveArrow').style.display = 'none';
+    $('board').querySelectorAll('.ai-origin, .ai-destination').forEach(el => el.classList.remove('ai-origin', 'ai-destination'));
     const p = state.board[i];
     if (selected !== null && E.canMove(state.board, selected, i, state.humanSide)) { perform({ kind: 'move', from: selected, to: i }); return; }
     if (p?.hidden) { perform({ kind: 'flip', to: i }); return; }
@@ -214,10 +259,40 @@
     const wasHuman = state.turn === 'human';
     if (wasHuman) { history.push(snapshot()); if (history.length > 25) history.shift(); }
     state = E.apply(state, action);
+    aiReview = !wasHuman;
     selected = null; suggestion = null;
     tone(action.kind === 'flip' ? 'flip' : state.last.captured ? 'capture' : 'move');
     render(); baseCoach(); save();
     if (state.result) showResult(); else scheduleAI();
+  }
+  async function presentAI(action, token) {
+    const cell = i => $('board').querySelector('[data-index="' + i + '"]');
+    const source = cell(action.kind === 'flip' ? action.to : action.from);
+    const target = cell(action.to);
+    source.classList.add('ai-preview');
+    if (action.kind === 'flip') coach('看小虎翻這一顆', '亮起來的這顆棋，準備翻開囉。');
+    else {
+      const p = state.board[action.from], q = state.board[action.to];
+      target.classList.add(q ? 'ai-capture-preview' : 'ai-preview');
+      coach('看看小虎這一步', '小虎要把「' + E.name(p) + '」往' + direction(action.from, action.to) + '移動' + (q ? '，吃掉你的「' + E.name(q) + '」。' : '一格。'));
+    }
+    await new Promise(resolve => setTimeout(resolve, 700));
+    if (token !== revision || document.querySelector('dialog[open]')) return;
+    const piece = source.querySelector('.piece');
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (piece && !reduced) {
+      let frames;
+      if (action.kind === 'flip') frames = [{ transform: 'rotateY(0deg)' }, { transform: 'rotateY(85deg)' }];
+      else {
+        const a = source.getBoundingClientRect(), b = target.getBoundingClientRect();
+        source.style.zIndex = '4';
+        frames = [{ transform: 'translate(0, 0)' }, { transform: 'translate(' + (b.x - a.x) + 'px, ' + (b.y - a.y) + 'px)' }];
+      }
+      const animation = piece.animate(frames, { duration: action.kind === 'flip' ? 600 : 1000, easing: 'ease-in-out', fill: 'forwards' });
+      moveAnimation = animation;
+      try { await animation.finished; } catch { /* A new game or undo cancels the presentation. */ }
+      if (moveAnimation === animation) moveAnimation = null;
+    } else await new Promise(resolve => setTimeout(resolve, 1000));
   }
   function scheduleAI() {
     clearTimeout(aiTimer);
@@ -229,12 +304,17 @@
       const result = await searchPosition(E.other(state.humanSide), difficulty);
       if (token !== revision || state.turn !== 'ai' || state.result) return;
       if (document.querySelector('dialog[open]')) { scheduleAI(); return; }
-      if (result?.action) perform(result.action);
-    }, 450);
+      if (result?.action) {
+        await presentAI(result.action, token);
+        if (token !== revision || state.turn !== 'ai' || state.result) return;
+        if (document.querySelector('dialog[open]')) { render(); baseCoach(); scheduleAI(); return; }
+        perform(result.action);
+      }
+    }, 1800);
   }
   async function hint() {
     if (state.turn !== 'human' || state.result || hintBusy) return;
-    hintBusy = true; render();
+    aiReview = false; hintBusy = true; render();
     const token = revision;
     const result = await searchPosition(state.humanSide, 'standard');
     if (token !== revision || state.turn !== 'human' || state.result) return;
@@ -256,14 +336,14 @@
     if (difficulty === 'challenge' || !history.length) return;
     cancelSearch();
     clearTimeout(aiTimer); clearTimeout(arrowTimer);
-    state = history.pop(); selected = null; suggestion = null;
+    aiReview = false; state = history.pop(); selected = null; suggestion = null;
     render(); save(); coach('回到剛剛，再想一次', '已回到你上一步開始前，小虎剛才那一步也一起收回。這次想試試哪一步？');
   }
   function newGame() {
     cancelSearch();
     clearTimeout(aiTimer); clearTimeout(arrowTimer);
     document.querySelectorAll('dialog[open]').forEach(d => d.close());
-    state = E.create(); history = []; selected = null; suggestion = null;
+    aiReview = false; state = E.create(); history = []; selected = null; suggestion = null;
     render(); baseCoach(); save();
   }
   function showResult() {
@@ -285,6 +365,15 @@
     const descriptions = { practice: ['入門：一起慢慢想', '小虎會保護自己的棋，不會故意亂送。可以使用提示和悔棋。'], standard: ['標準：多想幾步', '小虎會預想接下來的交換與危險。可以使用提示和悔棋。'], challenge: ['挑戰：小虎認真了', '小虎會想得更深，尤其是棋子變少的時候。不能悔棋，但仍可使用提示。'] };
     coach(...descriptions[difficulty]); scheduleAI();
   };
+  for (const side of ['red', 'black']) {
+    $(side + 'Rotate').onclick = () => {
+      capturedRotation[side] = (capturedRotation[side] + 90) % 360;
+      const el = $(side + 'Captured');
+      el.style.setProperty('--captured-angle', capturedRotation[side] + 'deg');
+      $(side + 'Rotate').setAttribute('aria-label', '旋轉' + (side === 'red' ? '紅' : '黑') + '棋休息區的棋字，目前 ' + capturedRotation[side] + ' 度');
+      save();
+    };
+  }
   $('soundButton').onclick = () => { sound = !sound; tone('flip'); render(); save(); };
   $('fullRanks').innerHTML = E.TYPES.map(t => '<span><i class="mini-piece">' + t.black + '</i>' + t.red + '／' + t.black + '</span>').join('');
   // Three isolated, interactive lessons. No tutorial action touches game state.
@@ -317,7 +406,8 @@
         else if (lesson > 0 && i === 1) lessonPicked = true;
         else if (lesson > 0 && i === 2 && lessonPicked) lessonDone = true;
         else { $('lessonFeedback').textContent = lesson > 0 && !lessonPicked ? '先點選紅色的俥喔。' : '試試有棋子或虛線框的位置。'; return; }
-        tone(lesson === 0 ? 'flip' : 'move'); renderLesson();
+        if (lessonDone) tone(lesson === 0 ? 'flip' : lesson === 2 ? 'capture' : 'move');
+        renderLesson();
         if (lessonDone) $('lessonNext').focus(); else $('lessonBoard').children[2].focus();
       };
       $('lessonBoard').append(b);

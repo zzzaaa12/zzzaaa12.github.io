@@ -311,3 +311,50 @@ dialog { position: fixed; inset: 0; margin: auto; border: 1px solid var(--color-
 /* Leave a small, consistent gap between the header and the game. */
 main { padding-top: 20px; }
 @media (max-width: 43.99rem) { main { padding-top: 16px; } }
+
+/* Help children follow the computer's turn. */
+.cell.ai-preview, .cell.ai-destination { outline: 3px solid var(--color-primary, #386b55); outline-offset: -4px; border-radius: 10px; }
+.cell.ai-capture-preview { outline: 4px dashed #b34838; outline-offset: -5px; border-radius: 10px; }
+.cell.ai-origin { background: rgba(56, 107, 85, .16); box-shadow: inset 0 0 0 3px rgba(56, 107, 85, .55); }
+.cell.ai-preview .piece { filter: brightness(1.12); }
+.cell.ai-destination .piece { animation: ai-arrive 650ms ease-out; }
+@keyframes ai-arrive { from { opacity: .4; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .cell.ai-destination .piece { animation: none; } }
+
+/* Small resting pieces stay beside the board, close to the action. */
+.board-surround { display: grid; grid-template-columns: 76px minmax(0, 1fr) 76px; align-items: stretch; gap: 10px; margin-inline: auto; }
+.board-surround .board-shell { width: 100%; min-width: 0; max-width: none; margin: 0; }
+.capture-rail { min-width: 0; padding: 10px 5px; border: 1px solid var(--color-line); border-radius: 12px; background: var(--color-green-soft); }
+.capture-rail h2 { margin: 0 0 10px; font-size: 12px; text-align: center; line-height: 1.6; color: var(--color-muted); }
+.red-rail h2 { color: #a44236; }
+.capture-rail .captured-pieces { display: grid; grid-template-columns: repeat(2, 28px); align-content: start; justify-content: center; gap: 5px; min-height: 28px; }
+.capture-rail .mini-piece { width: 28px; height: 28px; font-size: 18px; background: var(--color-piece); }
+.capture-rail .captured-pieces small { grid-column: 1 / -1; font-size: 11px; line-height: 1.7; text-align: center; }
+.capture-rail .just-captured { animation: captured-arrive 1100ms ease-out; }
+@keyframes captured-arrive { from { box-shadow: 0 0 0 4px #d7ad46; filter: brightness(1.2); } to { box-shadow: 0 0 0 0 transparent; filter: brightness(1); } }
+@media (min-width: 64rem) { .board-surround { max-width: min(100%, calc(200svh - 638px)); } }
+@media (max-width: 43.99rem) {
+  .board-surround { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .capture-rail { display: flex; gap: 10px; align-items: center; padding: 8px 10px; }
+  .capture-rail h2 { flex: 0 0 56px; margin: 0; font-size: 11px; }
+  .capture-rail .captured-pieces { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 4px; min-height: 24px; }
+  .capture-rail .mini-piece { width: 24px; height: 24px; font-size: 16px; }
+  .capture-rail .captured-pieces small { text-align: left; }
+}
+@media (prefers-reduced-motion: reduce) { .capture-rail .just-captured { animation: none; } }
+
+/* Rotate lettering independently for readers on either side of a tablet. */
+.capture-heading { display: flex; flex-direction: column; align-items: center; gap: 5px; margin-bottom: 10px; }
+.capture-heading h2 { margin: 0; }
+.rotate-captured { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 44px; min-height: 44px; padding: 4px; border: 1px solid var(--color-line); border-radius: 8px; background: var(--color-piece); color: var(--color-ink); cursor: pointer; font: inherit; }
+.rotate-captured > span { font-size: 24px; line-height: 1; }
+.rotate-captured small { font-size: 10px; }
+.captured-glyph { display: inline-block; transform: rotate(var(--captured-angle, 0deg)); transition: transform 180ms ease; }
+@media (max-width: 43.99rem) {
+  .capture-rail .capture-heading { flex: 0 0 56px; gap: 3px; margin: 0; }
+  .capture-heading h2 { flex: auto; }
+}
+@media (prefers-reduced-motion: reduce) { .captured-glyph { transition: none; } }
+
+/* Bold lettering keeps the small resting pieces easy to read. */
+.capture-rail .captured-glyph { font-weight: 700; }
