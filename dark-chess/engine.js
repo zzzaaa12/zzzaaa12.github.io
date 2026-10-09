@@ -86,6 +86,7 @@
     next.positions[k] = (next.positions[k] || 0) + 1;
     if (!next.result && next.positions[k] >= 3) next.result = { winner: 'draw', reason: '相同局面出現三次，這局握手和棋！' };
     if (!next.result && next.quiet >= 80) next.result = { winner: 'draw', reason: '連續 80 步沒有翻棋或吃棋，這局握手和棋！' };
+    if (!next.result && deadMaterial(next.board)) next.result = { winner: 'draw', reason: '棋盤只剩兩顆或三顆棋，而且已沒有任何一方能吃掉對方，這局自動判和。' };
     return next;
   }
   function moved(board, a) { const next = board.slice(); next[a.to] = next[a.from]; next[a.from] = null; return next; }
@@ -107,6 +108,16 @@
     if (p.type === 'cannon') return true;
     if (p.type === 'king' && q.type === 'pawn') return false;
     return p.type === 'pawn' && q.type === 'king' || info(p).rank >= info(q).rank;
+  }
+  function deadMaterial(board) {
+    if (board.some(p => p?.hidden)) return false;
+    const pieces = board.filter(Boolean);
+    if (pieces.length < 2 || pieces.length > 3 || !pieces.some(p => p.side === 'red') || !pieces.some(p => p.side === 'black')) return false;
+    for (const a of pieces) for (const b of pieces) {
+      if (a.side === b.side) continue;
+      if ((a.type === 'cannon' && pieces.length === 3) || beats(a, b)) return false;
+    }
+    return true;
   }
   const searchKey = (board, side) => side + ':' + board.map(p => !p ? '.' : p.hidden ? '?' : p.side[0] + p.type).join(',');
   function analyze(input, side, difficulty = 'standard', options = {}) {

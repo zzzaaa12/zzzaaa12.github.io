@@ -15,12 +15,13 @@
     check: '<path d="m5 12 4 4L19 6"/>',
     heart: '<path d="M12 20S2 14 2 8a5 5 0 0 1 10-1 5 5 0 0 1 10 1c0 6-10 12-10 12Z"/>',
     flag: '<path d="M5 22V3c5-4 9 4 14 0v12c-5 4-9-4-14 0"/>',
-    close: '<path d="m6 6 12 12M6 18 18 6"/>'
+    close: '<path d="m6 6 12 12M6 18 18 6"/>',
+    settings: '<path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="18" r="2"/>'
   };
   function icon(name) { return '<svg viewBox="0 0 24 24" aria-hidden="true">' + icons[name] + '</svg>'; }
   document.querySelectorAll('[data-icon]').forEach(el => el.innerHTML = icon(el.dataset.icon));
   const STORAGE = 'little-dark-chess-v1';
-  let state = E.create(), history = [], difficulty = 'standard', sound = false;
+  let state = E.create(), history = [], difficulty = 'standard', mode = 'computer', sound = false;
   let selected = null, suggestion = null, aiTimer = null, arrowTimer = null, context = null, storageOK = true;
   const capturedRotation = { red: 0, black: 0 };
   let boardRotation = 0, playSpeed = 'slow', soundVolume = .8;
@@ -78,6 +79,7 @@
         state = saved.state;
         history = Array.isArray(saved.history) ? saved.history.filter(E.validState).slice(-25) : [];
         difficulty = ['practice', 'standard', 'challenge'].includes(saved.difficulty) ? saved.difficulty : 'standard';
+        mode = saved.mode === 'two-player' ? 'two-player' : 'computer';
         sound = saved.sound === true;
         if ([0, 90, 180, 270].includes(saved.boardRotation)) boardRotation = saved.boardRotation;
         if (['slow', 'normal'].includes(saved.playSpeed)) playSpeed = saved.playSpeed;
@@ -92,9 +94,10 @@
   } catch { storageOK = false; }
   const mobile = window.matchMedia('(max-width: 43.99rem)');
   const sideLabel = side => side === 'red' ? '紅隊' : '黑隊';
+  const playerName = actor => mode === 'two-player' ? (actor === 'human' ? '小虎' : '小龍') : (actor === 'human' ? '你' : '小虎');
   const snapshot = () => JSON.parse(JSON.stringify(state));
   const save = () => {
-    try { localStorage.setItem(STORAGE, JSON.stringify({ version: 1, state, history, difficulty, sound, capturedRotation, boardRotation, playSpeed, soundVolume })); storageOK = true; }
+    try { localStorage.setItem(STORAGE, JSON.stringify({ version: 1, state, history, difficulty, mode, sound, capturedRotation, boardRotation, playSpeed, soundVolume })); storageOK = true; }
     catch { storageOK = false; }
     $('saveNote').lastElementChild.textContent = storageOK ? '進度會自動保存，可以放心休息' : '這個瀏覽器無法存檔；請保持頁面開啟';
   };
@@ -157,15 +160,16 @@
     return Math.floor(a / cols) === Math.floor(b / cols) ? (b > a ? '右' : '左') : (b > a ? '下' : '上');
   }
   function render() {
-    const interactive = state.turn === 'human' && !state.result && !replayBusy;
+    const currentSide = state.humanSide ? (state.turn === 'human' ? state.humanSide : E.other(state.humanSide)) : null;
+    const interactive = (mode === 'two-player' || state.turn === 'human') && !state.result && !replayBusy;
     $('board').style.setProperty('--board-angle', boardRotation + 'deg');
     $('boardRotate').setAttribute('aria-label', '旋轉棋盤棋字，目前 ' + boardRotation + ' 度');
     $('playSpeed').value = playSpeed;
     $('soundVolume').value = Math.round(soundVolume * 100);
     $('volumeValue').textContent = Math.round(soundVolume * 100) + '%';
-    $('replayButton').disabled = replayBusy || state.turn !== 'human' || state.last?.actor !== 'ai';
+    $('replayButton').disabled = mode === 'two-player' || replayBusy || state.turn !== 'human' || state.last?.actor !== 'ai';
     $('replayButton').textContent = replayBusy ? '正在重播…' : '再看一次';
-    const all = E.actions(state.board, state.humanSide);
+    const all = E.actions(state.board, currentSide);
     const froms = new Set(all.filter(a => a.kind === 'move').map(a => a.from));
     const targets = new Set(all.filter(a => a.kind === 'move' && a.from === selected).map(a => a.to));
     const focusIndex = document.activeElement?.dataset.index;
@@ -193,17 +197,23 @@
     }
     if (focusIndex !== undefined) $('board').querySelector('[data-index="' + focusIndex + '"]')?.focus({ preventScroll: true });
     $('moveCount').textContent = '第 ' + (Math.floor(state.ply / 2) + 1) + ' 回合';
-    $('turnBadge').innerHTML = '<span></span> ' + (replayBusy ? '再看一次小虎的動作' : state.result ? '這一局完成了' : state.turn === 'ai' ? '小虎想一想…' : '輪到你了');
-    $('turnBadge').classList.toggle('thinking', state.turn === 'ai' && !state.result);
-    $('humanSide').textContent = state.humanSide ? '你是' + sideLabel(state.humanSide) + ' · 剩下 ' + (16 - state.captured.filter(p => p.side === state.humanSide).length) + ' 顆' : '翻一顆棋，決定你的顏色';
-    $('aiSide').textContent = state.humanSide ? sideLabel(E.other(state.humanSide)) + ' · 剩下 ' + (16 - state.captured.filter(p => p.side !== state.humanSide).length) + ' 顆' : '陪你一起練習';
+    const turnText = replayBusy ? '再看一次小虎的動作' : state.result ? '這一局完成了' : state.turn === 'ai' ? '小虎想一想…' : '輪到你了';
+    $('turnBadge').innerHTML = mode === 'two-player' && !state.result
+      ? '<span class="turn-avatar ' + (state.turn === 'human' ? 'tiger' : 'dragon') + '" aria-hidden="true">' + (state.turn === 'human' ? '虎' : '龍') + '</span><span>輪到' + playerName(state.turn) + '</span>'
+      : '<span class="turn-indicator"></span><span>' + turnText + '</span>';
+    $('turnBadge').classList.toggle('thinking', mode === 'computer' && state.turn === 'ai' && !state.result);
+    $('humanSide').textContent = state.humanSide ? (mode === 'two-player' ? '小虎 · ' : '你是') + sideLabel(state.humanSide) + ' · 剩下 ' + (16 - state.captured.filter(p => p.side === state.humanSide).length) + ' 顆' : '翻一顆棋，決定先手的顏色';
+    $('firstPlayerName').innerHTML = mode === 'two-player' ? '小虎' : '小小棋手 <span class="you-label">你</span>';
+    $('opponentName').textContent = mode === 'two-player' ? '小龍' : '小虎棋友';
+    $('opponentAvatar').textContent = mode === 'two-player' ? '龍' : '虎';
+    $('aiSide').textContent = state.humanSide ? (mode === 'two-player' ? '小龍 · ' : '') + sideLabel(E.other(state.humanSide)) + ' · 剩下 ' + (16 - state.captured.filter(p => p.side !== state.humanSide).length) + ' 顆' : mode === 'two-player' ? '等待小虎翻棋' : '陪你一起練習';
     const hidden = state.board.filter(p => p?.hidden).length;
     $('remaining').textContent = hidden ? '還有 ' + hidden + ' 顆沒翻開' : '所有棋子都翻開了';
-    $('hintButton').disabled = !interactive || hintBusy;
-    $('hintButton').innerHTML = icon('bulb') + (hintBusy ? '幫你想一步…' : '給我提示');
-    $('undoButton').disabled = difficulty === 'challenge' || !history.length;
-    $('undoButton').title = difficulty === 'challenge' ? '挑戰模式不提供悔棋；可切換成入門或標準' : !history.length ? '走過一步，就可以悔棋' : '回到你上一步開始前';
-    $('difficulty').value = difficulty;
+    $('hintButton').disabled = mode === 'two-player' || !interactive || hintBusy;
+    $('hintButton').innerHTML = icon('bulb') + (hintBusy ? '幫你想一步…' : mode === 'two-player' ? '兩人對戰' : '給我提示');
+    $('undoButton').disabled = (mode === 'computer' && difficulty === 'challenge') || !history.length;
+    $('undoButton').title = mode === 'computer' && difficulty === 'challenge' ? '挑戰模式不提供悔棋；可切換成入門或標準' : !history.length ? '走過一步，就可以悔棋' : '回到上一步開始前';
+    $('gameMode').value = mode === 'two-player' ? mode : difficulty;
     $('soundButton').innerHTML = icon(sound ? 'sound' : 'mute');
     $('soundButton').setAttribute('aria-label', sound ? '關閉音效' : '開啟音效');
     $('soundButton').setAttribute('aria-pressed', String(sound));
@@ -239,7 +249,8 @@
     clearTimeout(arrowTimer);
   }
   function baseCoach() {
-    if (state.result) { coach(state.result.winner === 'human' ? '你完成了這場挑戰！' : state.result.winner === 'draw' ? '握握手，這局和棋！' : '這次讓小虎先贏一局', state.lesson || '每一局都是新的練習。下次再一起想想不同的走法！'); return; }
+    if (state.result) { coach(state.result.winner === 'draw' ? '握握手，這局和棋！' : mode === 'two-player' ? playerName(state.result.winner) + ' 獲勝！' : state.result.winner === 'human' ? '你完成了這場挑戰！' : '這次讓小虎先贏一局', state.lesson || '每一局都是新的練習。下次再一起想想不同的走法！'); return; }
+    if (mode === 'two-player') { coach('輪到' + playerName(state.turn), '請由' + playerName(state.turn) + '操作。小虎先翻的第一顆棋，決定小虎的隊伍。'); return; }
     if (state.turn === 'ai') { coach('換小虎想一想', '看看棋面，猜猜我下一步會怎麼走？'); return; }
     if (!state.humanSide) { coach('嗨！先翻一顆棋吧', '我是小虎！點一顆綠色的棋子，看看你會加入紅隊還是黑隊。'); return; }
     const last = state.last;
@@ -249,35 +260,36 @@
   function clickCell(i) {
     if (replayBusy) return;
     if (state.result) { baseCoach(); return; }
-    if (state.turn !== 'human') { coach('等小虎走完這一步', '馬上就輪到你了，可以先看看棋面。'); return; }
+    if (mode !== 'two-player' && state.turn !== 'human') { coach('等小虎走完這一步', '馬上就輪到你了，可以先看看棋面。'); return; }
     aiReview = false;
     $('moveArrow').style.display = 'none';
     $('board').querySelectorAll('.ai-origin, .ai-destination').forEach(el => el.classList.remove('ai-origin', 'ai-destination'));
     const p = state.board[i];
-    if (selected !== null && E.canMove(state.board, selected, i, state.humanSide)) { perform({ kind: 'move', from: selected, to: i }); return; }
+    const currentSide = state.humanSide ? (state.turn === 'human' ? state.humanSide : E.other(state.humanSide)) : null;
+    if (selected !== null && E.canMove(state.board, selected, i, currentSide)) { perform({ kind: 'move', from: selected, to: i }); return; }
     if (p?.hidden) { perform({ kind: 'flip', to: i }); return; }
     suggestion = null;
-    if (p && p.side === state.humanSide) {
+    if (p && p.side === currentSide) {
       if (selected === i) { selected = null; render(); baseCoach(); return; }
       selected = i;
-      const moves = E.actions(state.board, state.humanSide).filter(a => a.kind === 'move' && a.from === i);
+      const moves = E.actions(state.board, currentSide).filter(a => a.kind === 'move' && a.from === i);
       render();
       coach('你選了「' + E.name(p) + '」', moves.length ? '綠色圓點可以走，紅色「吃」框可以吃。' + (p.type === 'cannon' ? '炮吃棋時，要隔著恰好一顆棋。' : '點一個標記的位置，完成這一步。') : '這顆棋暫時走不了。試試另一顆自己的棋，或翻開一顆蓋牌。');
     } else if (selected !== null) {
       const source = state.board[selected];
       coach('這一步還不能走喔', !p ? '一般移動只能上下左右走一格。請選有綠色圓點的位置。' : source.type === 'cannon' ? '炮要在同一直線上，隔著恰好一顆棋才能吃。' : '要相鄰，而且吃得動對方才行。試試有「吃」標記的棋。');
-    } else coach(p ? '這是小虎的棋子' : '先選一顆自己的棋', p ? '找找' + sideLabel(state.humanSide) + '的棋，或翻一顆綠色的蓋牌。' : '點自己的棋，再點綠色圓點，就能移動囉。');
+    } else coach(p ? (mode === 'two-player' ? '這是對方的棋子' : '這是小虎的棋子') : '先選一顆自己的棋', p ? '找找' + sideLabel(currentSide) + '的棋，或翻一顆綠色的蓋牌。' : '點自己的棋，再點綠色圓點，就能移動囉。');
   }
   function perform(action) {
     cancelSearch();
     const wasHuman = state.turn === 'human';
-    if (wasHuman) { history.push(snapshot()); if (history.length > 25) history.shift(); }
+    if (wasHuman || mode === 'two-player') { history.push(snapshot()); if (history.length > 25) history.shift(); }
     state = E.apply(state, action);
-    aiReview = !wasHuman;
+    aiReview = mode === 'computer' && !wasHuman;
     selected = null; suggestion = null;
     tone(action.kind === 'flip' ? 'flip' : state.last.captured ? 'capture' : 'move');
     render(); baseCoach(); save();
-    if (state.result) showResult(); else scheduleAI();
+    if (state.result) showResult(); else if (mode === 'computer') scheduleAI();
   }
   async function presentAI(action, token, board = state.board) {
     const cell = i => $('board').querySelector('[data-index="' + i + '"]');
@@ -310,7 +322,7 @@
   }
   function scheduleAI() {
     clearTimeout(aiTimer);
-    if (state.turn !== 'ai' || state.result) return;
+    if (mode === 'two-player' || state.turn !== 'ai' || state.result) return;
     aiTimer = setTimeout(async () => {
       // Pause for reading rules or practising in the separate tutorial.
       if (document.querySelector('dialog[open]')) { scheduleAI(); return; }
@@ -327,7 +339,7 @@
     }, playSpeed === 'slow' ? 1800 : 800);
   }
   async function hint() {
-    if (state.turn !== 'human' || state.result || hintBusy || replayBusy) return;
+    if (mode === 'two-player' || state.turn !== 'human' || state.result || hintBusy || replayBusy) return;
     aiReview = false; hintBusy = true; render();
     const token = revision;
     const result = await searchPosition(state.humanSide, 'standard');
@@ -347,11 +359,11 @@
     }
   }
   function undo() {
-    if (difficulty === 'challenge' || !history.length) return;
+    if ((mode === 'computer' && difficulty === 'challenge') || !history.length) return;
     cancelSearch();
     clearTimeout(aiTimer); clearTimeout(arrowTimer);
     aiReview = false; state = history.pop(); selected = null; suggestion = null;
-    render(); save(); coach('回到剛剛，再想一次', '已回到你上一步開始前，小虎剛才那一步也一起收回。這次想試試哪一步？');
+    render(); save(); coach('回到剛剛，再想一次', mode === 'two-player' ? '已回到上一手之前，小虎和小龍可以重新思考。' : '已回到你上一步開始前，小虎剛才那一步也一起收回。這次想試試哪一步？');
   }
   function newGame() {
     cancelSearch();
@@ -361,7 +373,7 @@
     render(); baseCoach(); save();
   }
   function showResult() {
-    $('resultTitle').textContent = state.result.winner === 'human' ? '這一局，你贏了！' : state.result.winner === 'draw' ? '不分上下，握手和棋！' : '小虎贏了，下次再挑戰！';
+    $('resultTitle').textContent = state.result.winner === 'draw' ? '不分上下，握手和棋！' : mode === 'two-player' ? playerName(state.result.winner) + ' 獲勝！' : state.result.winner === 'human' ? '這一局，你贏了！' : '小虎贏了，下次再挑戰！';
     $('resultReason').textContent = state.result.reason;
     $('resultLesson').textContent = state.lesson || '你完成了 ' + Math.ceil(state.ply / 2) + ' 回合的思考。願意再試一次，就是很棒的進步。';
     $('resultDialog').showModal();
@@ -370,12 +382,18 @@
   document.querySelectorAll('.close-dialog').forEach(b => b.addEventListener('click', () => b.closest('dialog').close()));
   document.querySelectorAll('dialog').forEach(d => d.addEventListener('click', event => { const r = d.getBoundingClientRect(); if (event.target === d && (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom)) d.close(); }));
   $('rulesButton').onclick = $('moreRules').onclick = () => openDialog('rulesDialog');
+  $('settingsButton').onclick = () => openDialog('settingsDialog');
   $('hintButton').onclick = hint;
   $('undoButton').onclick = undo;
   $('newButton').onclick = () => state.ply ? openDialog('newDialog') : newGame();
   $('confirmNew').onclick = $('playAgain').onclick = newGame;
-  $('difficulty').onchange = event => {
-    cancelSearch(); clearTimeout(aiTimer); difficulty = event.target.value; render(); save();
+  $('gameMode').onchange = event => {
+    cancelSearch(); clearTimeout(aiTimer);
+    if (event.target.value === 'two-player') mode = 'two-player';
+    else { mode = 'computer'; difficulty = event.target.value; }
+    state = E.create(); history = []; selected = null; suggestion = null;
+    render(); save();
+    if (mode === 'two-player') { coach('小虎和小龍來對戰！', '小虎先翻一顆棋，翻出的顏色就是小虎的隊伍。之後小虎和小龍輪流操作。'); return; }
     const descriptions = { practice: ['入門：一起慢慢想', '小虎會保護自己的棋，不會故意亂送。可以使用提示和悔棋。'], standard: ['標準：多想幾步', '小虎會預想接下來的交換與危險。可以使用提示和悔棋。'], challenge: ['挑戰：小虎認真了', '小虎會想得更深，尤其是棋子變少的時候。不能悔棋，但仍可使用提示。'] };
     coach(...descriptions[difficulty]); scheduleAI();
   };
