@@ -206,6 +206,12 @@
     $('firstPlayerName').innerHTML = mode === 'two-player' ? '小虎' : '小小棋手 <span class="you-label">你</span>';
     $('opponentName').textContent = mode === 'two-player' ? '小龍' : '小虎棋友';
     $('opponentAvatar').textContent = mode === 'two-player' ? '龍' : '虎';
+    const playerTeams = [[$('firstPlayerName'), $('firstPlayerAvatar')], [$('opponentName'), $('opponentAvatar')]];
+    const assignedTeams = [state.humanSide, state.humanSide ? E.other(state.humanSide) : null];
+    playerTeams.forEach((pair, index) => pair.forEach(el => {
+      el.classList.toggle('team-red', assignedTeams[index] === 'red');
+      el.classList.toggle('team-black', assignedTeams[index] === 'black');
+    }));
     $('aiSide').textContent = state.humanSide ? (mode === 'two-player' ? '小龍 · ' : '') + sideLabel(E.other(state.humanSide)) + ' · 剩下 ' + (16 - state.captured.filter(p => p.side !== state.humanSide).length) + ' 顆' : mode === 'two-player' ? '等待小虎翻棋' : '陪你一起練習';
     const hidden = state.board.filter(p => p?.hidden).length;
     $('remaining').textContent = hidden ? '還有 ' + hidden + ' 顆沒翻開' : '所有棋子都翻開了';

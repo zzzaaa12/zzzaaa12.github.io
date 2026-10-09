@@ -1,6 +1,6 @@
 /* Cache only this game's assets; prefer fresh content whenever online. */
-const CACHE = 'dark-chess-tablet-v6';
-const ASSETS = ['./', './index.html', './tokens.css', './style.css?v=13', './engine.js?v=6', './app.js?v=17'];
+const CACHE = 'dark-chess-tablet-v7';
+const ASSETS = ['./', './index.html', './tokens.css', './style.css?v=14', './engine.js?v=6', './app.js?v=18'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)));
 });

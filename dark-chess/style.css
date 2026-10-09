@@ -50,6 +50,10 @@ h1 span { color: var(--color-green); }
 .tiger-mini { background: var(--color-coach); color: var(--color-ink); border: 1px solid var(--color-coach-line); font-family: var(--font-piece); font-size: 26px; }
 .you-avatar { background: var(--color-green-soft); color: var(--color-green); }
 .you-avatar svg { width: 28px; height: 28px; }
+.player strong.team-red { color: var(--color-red); }
+.player strong.team-black { color: var(--color-black); }
+.avatar.team-red { color: var(--color-red); background: var(--color-red-soft); border: 1px solid var(--color-red); }
+.avatar.team-black { color: var(--color-black); background: #e5eceb; border: 1px solid var(--color-black); }
 .you-label { font-size: 10px; padding: 2px 6px; border-radius: 5px; background: var(--color-green-soft); color: var(--color-green); margin-left: 3px; font-weight: 500; }
 .mode-control label { display: none; }
 select { max-width: 100%; min-height: 44px; padding: 7px 9px; font-size: 12px; border: 1px solid var(--color-line); border-radius: 10px; background: var(--color-paper); }
